@@ -1,7 +1,10 @@
 import Crisp
 
 @objc(CrispChatSdk)
-class CrispChatSdk: NSObject {
+class CrispChatSdk: RCTEventEmitter {
+    
+    var cancelActions: [CallbackToken] = []
+    var currentSessionId: String? = nil
 
     @objc
     func configure(_ websiteId: String) {
@@ -59,6 +62,7 @@ class CrispChatSdk: NSObject {
 
     @objc
     func resetSession() {
+        currentSessionId = nil
         CrispSDK.session.reset()
     }
 
@@ -72,12 +76,98 @@ class CrispChatSdk: NSObject {
             }
 
             viewController?.present(ChatViewController(), animated: true)
+           
+            self.addCallbacks()
         }
     }
 
+    func extractUser(from user: Message.Sender) -> String {
+        switch user {
+            case .`operator`:
+                return "operator"
+            case .user:
+                return "user"
+            default:
+                return ""
+            }
+    }
+    
+    func extractText(from content: Message.Content) -> String {
+        switch content {
+            case .text(let textValue):
+                return textValue
+            case .textWithAttachment(let textValue, _, _):
+                return textValue
+            case .textWithVideoAttachment(let textValue, _, _):
+                return textValue
+            default:
+                return ""
+        }
+    }
+    
+    func getJSMessageObject (message:Message) -> [String : Any] {
+        return ["content": ["text": self.extractText(from:message.content)], "fingerprint": message.fingerprint, "from": self.extractUser(from:message.from), "user": ["user_id": message.user?.userId, "nickname" : message.user?.nickname]] as [String : Any]
+    }
+    
+    func addCallbacks () {
+        let cancelSessionLoaded = CrispSDK.addCallback(.sessionLoaded { sessionId in
+            self.currentSessionId = sessionId
+            self.sendEvent(withName: "onSessionLoaded", body: ["sessionId": sessionId])
+            print("onSessionLoaded", sessionId)
+        })
+        
+        let cancelMessageSent = CrispSDK.addCallback(.messageSent { message in
+            self.sendEvent(withName: "onMessageSent", body: ["message": self.getJSMessageObject(message:message)])
+            print("onMessageSent", message)
+        })
+        
+        let cancelMessageReceived = CrispSDK.addCallback(.messageReceived { message in
+            self.sendEvent(withName: "onMessageReceived", body: ["message": self.getJSMessageObject(message:message)])
+            print("onMessageReceived", message)
+        })
+        
+        let cancelChatOpened = CrispSDK.addCallback(.chatOpened {
+            self.sendEvent(withName: "onChatOpened", body: ["sessionId": self.currentSessionId])
+            print("onChatOpened")
+        })
+        
+        let cancelChatClosed = CrispSDK.addCallback(.chatClosed {
+            self.sendEvent(withName: "onChatClosed", body: ["sessionId": self.currentSessionId])
+            print("onChatClosed")
+            self.removeCallbacks()
+        })
+        
+        cancelActions.append(cancelSessionLoaded)
+        cancelActions.append(cancelMessageSent)
+        cancelActions.append(cancelMessageReceived)
+        cancelActions.append(cancelChatOpened)
+        cancelActions.append(cancelChatClosed)
+    }
+    
+    func removeCallbacks () {
+        for action in cancelActions {
+            CrispSDK.removeCallback(token:action)
+        }
+    }
+
+    override func supportedEvents() -> [String]! {
+        return ["onSessionLoaded","onChatOpened", "onChatClosed", "onMessageSent", "onMessageReceived"]
+    }
+    
     @objc
-    static func requiresMainQueueSetup() -> Bool {
+    func searchHelpdesk () {
+        CrispSDK.searchHelpdesk()
+    }
+
+    @objc
+    func openHelpdeskArticle (_ id:String, locale:String, title: String? = "", category: String? = "") {
+        CrispSDK.openHelpdeskArticle(locale: locale, slug: id, title:title, category: category)
+    }
+    
+    @objc
+    override static func requiresMainQueueSetup() -> Bool {
         return true
     }
+
 
 }
